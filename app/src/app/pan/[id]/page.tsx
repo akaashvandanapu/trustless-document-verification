@@ -64,6 +64,8 @@ function isValidPanId(panId: string): boolean {
   return panPattern.test(panId);
 }
 
+type VerificationStatus = "found" | "not_found" | "found_but_wrong";
+
 function normalizeText(text: string): string {
   return text
     .toLowerCase()
@@ -86,8 +88,9 @@ export default function EnhancedPANVerifier({
   );
   const [publicKeyPEM, setPublicKeyPEM] = useState<string | null>(null);
   const [signatureValid, setSignatureValid] = useState<boolean | null>(null);
-  const [nameVerified, setNameVerified] = useState<boolean | null>(null);
-  const [panIdVerified, setPanIdVerified] = useState<boolean | null>(null);
+  const [showInvalidSignatureDialog, setShowInvalidSignatureDialog] = useState(false);
+  const [nameVerified, setNameVerified] = useState<VerificationStatus | null>(null);
+  const [panIdVerified, setPanIdVerified] = useState<VerificationStatus | null>(null);
   const [pdfBytes, setPdfBytes] = useState<Uint8Array | null>(null);
   const [pages, setPages] = useState<string[]>([]);
   const [proofData, setProofData] = useState<string | null>(null);
@@ -143,21 +146,38 @@ export default function EnhancedPANVerifier({
   }, []);
 
   const verifyNameInPages = useCallback(
-    (extractedPages: string[], proverName: string): boolean => {
+    (extractedPages: string[], proverName: string): VerificationStatus => {
+      if (!proverName) return "not_found";
       const normalizedProverName = normalizeText(proverName);
-      return extractedPages.some((page) => {
+      const found = extractedPages.some((page) => {
         const normalizedPage = normalizeText(page);
         return normalizedPage.includes(normalizedProverName);
       });
+      return found ? "found" : "not_found";
     },
     []
   );
 
   const verifyPanIdInPages = useCallback(
-    (extractedPages: string[], proverPanId: string): boolean => {
-      return extractedPages.some((page) => {
-        return page.toUpperCase().includes(proverPanId.toUpperCase());
+    (extractedPages: string[], proverPanId: string): VerificationStatus => {
+      if (!proverPanId) return "not_found";
+      const normalizedPanId = proverPanId.toUpperCase();
+      const found = extractedPages.some((page) => {
+        return page.toUpperCase().includes(normalizedPanId);
       });
+      if (!found) return "not_found";
+      // Check if the PAN ID format is valid and matches exactly
+      if (isValidPanId(proverPanId)) {
+        // Check for exact match (not just substring)
+        const exactMatch = extractedPages.some((page) => {
+          const upperPage = page.toUpperCase();
+          // Look for PAN ID as a word boundary match
+          const panRegex = new RegExp(`\\b${normalizedPanId}\\b`);
+          return panRegex.test(upperPage);
+        });
+        return exactMatch ? "found" : "found_but_wrong";
+      }
+      return "found";
     },
     []
   );
@@ -183,17 +203,22 @@ export default function EnhancedPANVerifier({
             result.signature?.is_valid || result.is_valid;
           setSignatureValid(isSignatureValid);
 
-          const isNameVerified = verifyNameInPages(
+          // Show dialog if signature is invalid
+          if (!isSignatureValid) {
+            setShowInvalidSignatureDialog(true);
+          }
+
+          const nameStatus = verifyNameInPages(
             result.pages || [],
             res?.proverName || ""
           );
-          setNameVerified(isNameVerified);
+          setNameVerified(nameStatus);
 
-          const isPanIdVerified = verifyPanIdInPages(
+          const panIdStatus = verifyPanIdInPages(
             result.pages || [],
             res?.proverPanId || ""
           );
-          setPanIdVerified(isPanIdVerified);
+          setPanIdVerified(panIdStatus);
 
           if (result.signature?.public_key) {
             try {
@@ -208,25 +233,25 @@ export default function EnhancedPANVerifier({
             }
           }
 
-          if (isSignatureValid && isNameVerified && isPanIdVerified) {
+          const allFound = nameStatus === "found" && panIdStatus === "found";
+          const hasWrongInfo = nameStatus === "found_but_wrong" || panIdStatus === "found_but_wrong";
+
+          if (isSignatureValid && allFound && !hasWrongInfo) {
             toast.success(
               "PDF verified successfully - Signature valid, name and PAN ID found"
             );
             setStatus("PDF verified successfully");
-          } else if (
-            isSignatureValid &&
-            (!isNameVerified || !isPanIdVerified)
-          ) {
-            const missingItems = [];
-            if (!isNameVerified) missingItems.push("name");
-            if (!isPanIdVerified) missingItems.push("PAN ID");
-            toast.warning(
-              `Signature valid but ${missingItems.join(" and ")} not found`
-            );
+          } else if (isSignatureValid) {
+            const issues: string[] = [];
+            if (nameStatus === "not_found") issues.push("name");
+            if (nameStatus === "found_but_wrong") issues.push("name (wrong)");
+            if (panIdStatus === "not_found") issues.push("PAN ID");
+            if (panIdStatus === "found_but_wrong") issues.push("PAN ID (wrong)");
+            
+            if (issues.length > 0) {
+              toast.warning(`Signature is valid, but issues with: ${issues.join(", ")}.`);
+            }
             setStatus("Signature valid but content verification failed");
-          } else {
-            toast.error("PDF verification failed");
-            setStatus("PDF verification failed");
           }
         } else {
           setStatus("PDF processing failed");
@@ -251,8 +276,8 @@ export default function EnhancedPANVerifier({
   const onGenerateProof = async () => {
     if (!pdfBytes) return toast.error("Please upload a PDF first");
     if (!signatureValid) return toast.error("PDF signature must be valid");
-    if (!nameVerified) return toast.error("Name must be present in PDF");
-    if (!panIdVerified) return toast.error("PAN ID must be present in PDF");
+    if (nameVerified !== "found") return toast.error("Name must be found and correct in PDF");
+    if (panIdVerified !== "found") return toast.error("PAN ID must be found and correct in PDF");
 
     setProcessing(true);
 
@@ -446,27 +471,16 @@ export default function EnhancedPANVerifier({
 
   const canGenerateProof =
     signatureValid &&
-    nameVerified &&
-    panIdVerified &&
+    nameVerified === "found" &&
+    panIdVerified === "found" &&
     pdfBytes &&
     !proofGenerated;
   const canSendMail = proofGenerated && !mailSent;
   const hasReceivedData = res?.signature || res?.snark;
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-slate-50 via-slate-100 to-slate-200 dark:from-slate-950 dark:via-slate-900 dark:to-slate-800">
-      <div className="sticky top-0 z-10 backdrop-blur-xl bg-white/80 dark:bg-slate-950/80 border-b border-border shadow-sm">
-        <div className="container mx-auto px-6 py-4 flex items-center justify-between">
-          <h1 className="text-2xl font-bold text-foreground flex items-center">
-            <div className="h-8 w-8 rounded-lg bg-blue-100 dark:bg-blue-900/30 flex items-center justify-center mr-3">
-              <CreditCard className="h-4 w-4 text-blue-600 dark:text-blue-400" />
-            </div>
-            PAN Verification
-          </h1>
-        </div>
-      </div>
-
-      <div className="container mx-auto px-6 py-8 space-y-8">
+    <div className="min-h-screen bg-gradient-to-br from-slate-50 via-slate-100 to-slate-200 dark:from-slate-950 dark:via-slate-900 dark:to-slate-800 -mt-16 pt-4">
+      <div className="container mx-auto px-6 py-4 space-y-8">
         <Card className="shadow-lg hover:shadow-xl transition-all duration-200 border-0 bg-white/70 dark:bg-slate-900/70 backdrop-blur-sm">
           <CardHeader className="pb-4">
             <CardTitle className="text-2xl font-bold text-foreground flex items-center gap-4">
@@ -767,55 +781,17 @@ export default function EnhancedPANVerifier({
                         )}
 
                         {nameVerified !== null && (
-                          <div className="flex items-center justify-between p-4 rounded-xl border bg-gradient-to-r from-slate-50 to-slate-100 dark:from-slate-800/50 dark:to-slate-700/50 shadow-sm">
-                            <div className="flex items-center space-x-3">
-                              {nameVerified ? (
-                                <div className="h-8 w-8 rounded-full bg-green-100 dark:bg-green-900/30 flex items-center justify-center">
-                                  <CheckCircle className="h-4 w-4 text-green-600 dark:text-green-400" />
-                                </div>
-                              ) : (
-                                <div className="h-8 w-8 rounded-full bg-red-100 dark:bg-red-900/30 flex items-center justify-center">
-                                  <XCircle className="h-4 w-4 text-red-600 dark:text-red-400" />
-                                </div>
-                              )}
-                              <span className="font-semibold">
-                                Name Verification
-                              </span>
-                            </div>
-                            <Badge
-                              variant={nameVerified ? "default" : "destructive"}
-                              className="shadow-sm px-3 py-1"
-                            >
-                              {nameVerified ? "Found" : "Not Found"}
-                            </Badge>
-                          </div>
+                          <VerificationResultItem
+                            label="Name Verification"
+                            status={nameVerified}
+                          />
                         )}
 
                         {panIdVerified !== null && (
-                          <div className="flex items-center justify-between p-4 rounded-xl border bg-gradient-to-r from-slate-50 to-slate-100 dark:from-slate-800/50 dark:to-slate-700/50 shadow-sm">
-                            <div className="flex items-center space-x-3">
-                              {panIdVerified ? (
-                                <div className="h-8 w-8 rounded-full bg-green-100 dark:bg-green-900/30 flex items-center justify-center">
-                                  <CheckCircle className="h-4 w-4 text-green-600 dark:text-green-400" />
-                                </div>
-                              ) : (
-                                <div className="h-8 w-8 rounded-full bg-red-100 dark:bg-red-900/30 flex items-center justify-center">
-                                  <XCircle className="h-4 w-4 text-red-600 dark:text-red-400" />
-                                </div>
-                              )}
-                              <span className="font-semibold">
-                                PAN ID Verification
-                              </span>
-                            </div>
-                            <Badge
-                              variant={
-                                panIdVerified ? "default" : "destructive"
-                              }
-                              className="shadow-sm px-3 py-1"
-                            >
-                              {panIdVerified ? "Found" : "Not Found"}
-                            </Badge>
-                          </div>
+                          <VerificationResultItem
+                            label="PAN ID Verification"
+                            status={panIdVerified}
+                          />
                         )}
                       </div>
                     </div>
@@ -1079,6 +1055,122 @@ export default function EnhancedPANVerifier({
           )}
         </div>
       </div>
+
+      {/* Invalid Signature Dialog */}
+      {showInvalidSignatureDialog && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm">
+          <Card className="w-full max-w-md mx-4 shadow-2xl border-2 border-red-200 dark:border-red-800">
+            <CardHeader className="pb-4">
+              <div className="flex items-center space-x-3">
+                <div className="h-12 w-12 rounded-full bg-red-100 dark:bg-red-900/30 flex items-center justify-center">
+                  <XCircle className="h-6 w-6 text-red-600 dark:text-red-400" />
+                </div>
+                <CardTitle className="text-2xl font-bold text-red-700 dark:text-red-400">
+                  Invalid Digital Signature
+                </CardTitle>
+              </div>
+            </CardHeader>
+            <CardContent className="space-y-6">
+              <p className="text-foreground">
+                The uploaded PDF does not have a valid digital signature. 
+                Please upload a digitally signed PDF document.
+              </p>
+              <div className="flex space-x-3">
+                <Button
+                  onClick={() => setShowInvalidSignatureDialog(false)}
+                  variant="outline"
+                  className="flex-1"
+                >
+                  Close
+                </Button>
+                <label className="flex-1">
+                  <Input
+                    type="file"
+                    accept=".pdf"
+                    onChange={(e) => {
+                      const file = e.target.files?.[0];
+                      if (file) {
+                        setShowInvalidSignatureDialog(false);
+                        processFile(file);
+                      }
+                      e.target.value = "";
+                    }}
+                    className="hidden"
+                  />
+                  <Button asChild className="w-full">
+                    <span>
+                      <Upload className="h-4 w-4 mr-2" />
+                      Upload Again
+                    </span>
+                  </Button>
+                </label>
+              </div>
+            </CardContent>
+          </Card>
+        </div>
+      )}
     </div>
   );
 }
+
+const VerificationResultItem = ({
+  label,
+  status,
+}: {
+  label: string;
+  status: VerificationStatus | null;
+}) => {
+  if (status === null) return null;
+
+  const getStatusConfig = () => {
+    switch (status) {
+      case "found":
+        return {
+          icon: CheckCircle,
+          iconColor: "text-green-600 dark:text-green-400",
+          bgColor: "bg-green-100 dark:bg-green-900/30",
+          badgeVariant: "default" as const,
+          badgeText: "Valid",
+          badgeClassName: "bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-400",
+        };
+      case "found_but_wrong":
+        return {
+          icon: XCircle,
+          iconColor: "text-orange-600 dark:text-orange-400",
+          bgColor: "bg-orange-100 dark:bg-orange-900/30",
+          badgeVariant: "destructive" as const,
+          badgeText: "Found but Wrong",
+          badgeClassName: "bg-orange-100 text-orange-800 dark:bg-orange-900/30 dark:text-orange-400",
+        };
+      case "not_found":
+        return {
+          icon: XCircle,
+          iconColor: "text-red-600 dark:text-red-400",
+          bgColor: "bg-red-100 dark:bg-red-900/30",
+          badgeVariant: "destructive" as const,
+          badgeText: "Not Found",
+          badgeClassName: "bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-400",
+        };
+    }
+  };
+
+  const config = getStatusConfig();
+  const Icon = config.icon;
+
+  return (
+    <div className="flex items-center justify-between p-4 rounded-xl border bg-gradient-to-r from-slate-50 to-slate-100 dark:from-slate-800/50 dark:to-slate-700/50 shadow-sm">
+      <div className="flex items-center space-x-3">
+        <div className={`h-8 w-8 rounded-full flex items-center justify-center ${config.bgColor}`}>
+          <Icon className={`h-4 w-4 ${config.iconColor}`} />
+        </div>
+        <span className="font-semibold">{label}</span>
+      </div>
+      <Badge
+        variant={config.badgeVariant}
+        className={`shadow-sm px-3 py-1 ${config.badgeClassName}`}
+      >
+        {config.badgeText}
+      </Badge>
+    </div>
+  );
+};

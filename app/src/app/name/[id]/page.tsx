@@ -57,6 +57,16 @@ function publicKeyInfoToPEM(spkiBuffer: ArrayBuffer): string {
   ].join("\n");
 }
 
+type VerificationStatus = "found" | "not_found" | "found_but_wrong";
+
+function normalizeText(text: string): string {
+  return text
+    .toLowerCase()
+    .replace(/[^\w\s]/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
 export default function EnhancedPDFVerifier({
   params,
 }: {
@@ -72,7 +82,8 @@ export default function EnhancedPDFVerifier({
   );
   const [publicKeyPEM, setPublicKeyPEM] = useState<string | null>(null);
   const [signatureValid, setSignatureValid] = useState<boolean | null>(null);
-  const [textVerified, setTextVerified] = useState<boolean | null>(null);
+  const [showInvalidSignatureDialog, setShowInvalidSignatureDialog] = useState(false);
+  const [textVerified, setTextVerified] = useState<VerificationStatus | null>(null);
   const [pdfBytes, setPdfBytes] = useState<Uint8Array | null>(null);
   const [pages, setPages] = useState<string[]>([]);
   const [proofData, setProofData] = useState<string | null>(null);
@@ -128,10 +139,65 @@ export default function EnhancedPDFVerifier({
   }, []);
 
   const verifyTextInPages = useCallback(
-    (extractedPages: string[], proverName: string): boolean => {
-      return extractedPages.some((page) =>
-        page.toLowerCase().includes(proverName.toLowerCase())
-      );
+    (extractedPages: string[], proverName: string): VerificationStatus => {
+      if (!proverName) return "not_found";
+      const normalizedProverName = normalizeText(proverName);
+      const proverNameWords = normalizedProverName.split(/\s+/).filter(w => w.length > 0);
+      
+      let exactMatch = false;
+      let partialMatch = false;
+      
+      for (const page of extractedPages) {
+        const normalizedPage = normalizeText(page);
+        
+        // Create pattern to match all words in order with word boundaries
+        const escapedWords = proverNameWords.map(w => w.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
+        const pattern = new RegExp(`\\b${escapedWords.join("\\s+")}\\b`, "i");
+        
+        const match = normalizedPage.match(pattern);
+        if (match && match.index !== undefined) {
+          // Extract the matched portion
+          const matchedText = match[0];
+          const matchedWords = matchedText.split(/\s+/).filter(w => w.length > 0);
+          
+          // Check if there are additional words immediately after the match
+          const matchEnd = match.index + matchedText.length;
+          const textAfterMatch = normalizedPage.substring(matchEnd).trim();
+          
+          // Check if there's text immediately after (no gap, just whitespace)
+          // This indicates the document has more words than provided
+          if (textAfterMatch.length > 0) {
+            const wordsAfterMatch = textAfterMatch.split(/\s+/).filter(w => w.length > 0);
+            // If there's at least one word immediately after (likely part of the name)
+            if (wordsAfterMatch.length > 0) {
+              // Check if it looks like a name word (alphanumeric, reasonable length)
+              const nextWord = wordsAfterMatch[0];
+              if (nextWord.length >= 2 && /^[a-z]+$/.test(nextWord)) {
+                // Document has more words than provided - it's wrong
+                partialMatch = true;
+                continue;
+              }
+            }
+          }
+          
+          // Exact match: same number of words AND no additional name words immediately after
+          if (matchedWords.length === proverNameWords.length) {
+            exactMatch = true;
+            break;
+          } else if (matchedWords.length < proverNameWords.length) {
+            // Partial match: some words found but not all
+            partialMatch = true;
+          }
+        }
+      }
+      
+      if (exactMatch) {
+        return "found";
+      } else if (partialMatch) {
+        return "found_but_wrong";
+      }
+      
+      return "not_found";
     },
     []
   );
@@ -178,21 +244,24 @@ export default function EnhancedPDFVerifier({
             }
           }
 
-          if (isSignatureValid && isTextVerified) {
+          if (isSignatureValid && textStatus === "found") {
             toast.success(
-              "PDF verified successfully - Signature valid and text found"
+              "PDF verified successfully - Signature valid and name found"
             );
             setStatus("PDF verified successfully");
-          } else if (isSignatureValid && !isTextVerified) {
-            toast.warning("Signature valid but required text not found");
-            setStatus("Signature valid but text verification failed");
-          } else {
-            toast.error("PDF verification failed");
-            setStatus("PDF verification failed");
+          } else if (isSignatureValid) {
+            if (textStatus === "found_but_wrong") {
+              toast.warning("Signature valid but name in document doesn't match exactly");
+            } else {
+              toast.warning("Signature valid but name not found");
+            }
+            setStatus("Signature valid but name verification failed");
           }
         } else {
-          setStatus("PDF processing failed");
-          toast.error("PDF processing failed");
+          // PDF processing failed - likely no digital signature
+          setSignatureValid(false);
+          setShowInvalidSignatureDialog(true);
+          setStatus("PDF does not have a valid digital signature.");
         }
       } catch (err: any) {
         setStatus("Error processing file");
@@ -207,8 +276,8 @@ export default function EnhancedPDFVerifier({
   const onGenerateProof = async () => {
     if (!pdfBytes) return toast.error("Please upload a PDF first");
     if (!signatureValid) return toast.error("PDF signature must be valid");
-    if (!textVerified)
-      return toast.error("Required text must be present in PDF");
+    if (textVerified !== "found")
+      return toast.error("Name must be found and correct in PDF");
 
     setProcessing(true);
 
@@ -362,26 +431,20 @@ export default function EnhancedPDFVerifier({
   }
 
   const canGenerateProof =
-    signatureValid && textVerified && pdfBytes && !proofGenerated;
+    signatureValid && textVerified === "found" && pdfBytes && !proofGenerated;
   const canSendMail = proofGenerated && !mailSent;
   const hasReceivedData = res?.publicKey || res?.snarkProof;
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-slate-50 via-slate-100 to-slate-200 dark:from-slate-950 dark:via-slate-900 dark:to-slate-800">
-      {/* Enhanced Header */}
-      <div className="sticky top-0 z-10 backdrop-blur-xl bg-white/80 dark:bg-slate-950/80 border-b border-border shadow-sm">
-        <div className="container mx-auto px-6 py-4 flex items-center justify-between"></div>
-      </div>
-
-      <div className="container mx-auto px-6 py-8 space-y-8">
-        {/* Enhanced User Info Card */}
+    <div className="min-h-screen bg-gradient-to-br from-slate-50 via-slate-100 to-slate-200 dark:from-slate-950 dark:via-slate-900 dark:to-slate-800 -mt-16 pt-4">
+      <div className="container mx-auto px-6 py-4 space-y-8">
         <Card className="shadow-lg hover:shadow-xl transition-all duration-200 border-0 bg-white/70 dark:bg-slate-900/70 backdrop-blur-sm">
           <CardHeader className="pb-4">
             <CardTitle className="text-2xl font-bold text-foreground flex items-center gap-4">
               <div className="h-8 w-8 rounded-lg bg-primary/10 flex items-center justify-center mr-3">
                 <Shield className="h-4 w-4 text-primary" />
               </div>
-              Verification Request Details
+              Name Verification Request Details
               <Button
                 onClick={fetchVerificationData}
                 variant="outline"
@@ -654,30 +717,12 @@ export default function EnhancedPDFVerifier({
                           </div>
                         )}
 
-                        {/* Enhanced Text Verification */}
+                        {/* Enhanced Name Verification */}
                         {textVerified !== null && (
-                          <div className="flex items-center justify-between p-4 rounded-xl border bg-gradient-to-r from-slate-50 to-slate-100 dark:from-slate-800/50 dark:to-slate-700/50 shadow-sm">
-                            <div className="flex items-center space-x-3">
-                              {textVerified ? (
-                                <div className="h-8 w-8 rounded-full bg-green-100 dark:bg-green-900/30 flex items-center justify-center">
-                                  <CheckCircle className="h-4 w-4 text-green-600 dark:text-green-400" />
-                                </div>
-                              ) : (
-                                <div className="h-8 w-8 rounded-full bg-red-100 dark:bg-red-900/30 flex items-center justify-center">
-                                  <XCircle className="h-4 w-4 text-red-600 dark:text-red-400" />
-                                </div>
-                              )}
-                              <span className="font-semibold">
-                                Text Verification
-                              </span>
-                            </div>
-                            <Badge
-                              variant={textVerified ? "default" : "destructive"}
-                              className="shadow-sm px-3 py-1"
-                            >
-                              {textVerified ? "Found" : "Not Found"}
-                            </Badge>
-                          </div>
+                          <VerificationResultItem
+                            label="Name Verification"
+                            status={textVerified}
+                          />
                         )}
                       </div>
                     </div>
@@ -951,6 +996,141 @@ export default function EnhancedPDFVerifier({
           )}
         </div>
       </div>
+
+      {/* Invalid Signature Dialog */}
+      {showInvalidSignatureDialog && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm">
+          <Card className="w-full max-w-md mx-4 shadow-2xl border-2 border-red-200 dark:border-red-800">
+            <CardHeader className="pb-4">
+              <div className="flex items-center space-x-3">
+                <div className="h-12 w-12 rounded-full bg-red-100 dark:bg-red-900/30 flex items-center justify-center">
+                  <XCircle className="h-6 w-6 text-red-600 dark:text-red-400" />
+                </div>
+                <CardTitle className="text-2xl font-bold text-red-700 dark:text-red-400">
+                  Invalid Digital Signature
+                </CardTitle>
+              </div>
+            </CardHeader>
+            <CardContent className="space-y-6">
+              <p className="text-foreground">
+                The uploaded PDF does not have a valid digital signature. 
+                Please upload a digitally signed PDF document.
+              </p>
+              <div className="flex space-x-3">
+                <Button
+                  onClick={() => setShowInvalidSignatureDialog(false)}
+                  variant="outline"
+                  className="flex-1"
+                >
+                  Close
+                </Button>
+                <label className="flex-1">
+                  <Input
+                    type="file"
+                    accept=".pdf"
+                    onChange={(e) => {
+                      const file = e.target.files?.[0];
+                      if (file) {
+                        setShowInvalidSignatureDialog(false);
+                        processFile(file);
+                      }
+                      e.target.value = "";
+                    }}
+                    className="hidden"
+                  />
+                  <Button asChild className="w-full">
+                    <span>
+                      <Upload className="h-4 w-4 mr-2" />
+                      Upload Again
+                    </span>
+                  </Button>
+                </label>
+              </div>
+            </CardContent>
+          </Card>
+        </div>
+      )}
     </div>
   );
 }
+
+const VerificationResultItem = ({
+  label,
+  status,
+}: {
+  label: string;
+  status: VerificationStatus | null;
+}) => {
+  if (status === null) return null;
+
+  // Normalize status to handle any string variations (case-insensitive)
+  const normalizedStatus = String(status).trim().toLowerCase().replace(/\s+/g, "_");
+  
+  const getStatusConfig = () => {
+    // Handle exact matches and variations
+    if (normalizedStatus === "found") {
+      return {
+        icon: CheckCircle,
+        iconColor: "text-green-600 dark:text-green-400",
+        bgColor: "bg-green-100 dark:bg-green-900/30",
+        badgeVariant: "default" as const,
+        badgeText: "Valid",
+        badgeClassName: "bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-400",
+      };
+    }
+    if (normalizedStatus === "found_but_wrong" || normalizedStatus === "foundbutwrong") {
+      return {
+        icon: XCircle,
+        iconColor: "text-orange-600 dark:text-orange-400",
+        bgColor: "bg-orange-100 dark:bg-orange-900/30",
+        badgeVariant: "destructive" as const,
+        badgeText: "Found but Wrong",
+        badgeClassName: "bg-orange-100 text-orange-800 dark:bg-orange-900/30 dark:text-orange-400",
+      };
+    }
+    if (normalizedStatus === "not_found" || normalizedStatus === "notfound") {
+      return {
+        icon: XCircle,
+        iconColor: "text-red-600 dark:text-red-400",
+        bgColor: "bg-red-100 dark:bg-red-900/30",
+        badgeVariant: "destructive" as const,
+        badgeText: "Not Found",
+        badgeClassName: "bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-400",
+      };
+    }
+    // Fallback for any unexpected status values
+    console.warn("Unknown status value:", status, "normalized:", normalizedStatus);
+    return {
+      icon: XCircle,
+      iconColor: "text-gray-600 dark:text-gray-400",
+      bgColor: "bg-gray-100 dark:bg-gray-900/30",
+      badgeVariant: "destructive" as const,
+      badgeText: "Unknown",
+      badgeClassName: "bg-gray-100 text-gray-800 dark:bg-gray-900/30 dark:text-gray-400",
+    };
+  };
+
+  const config = getStatusConfig();
+  if (!config || !config.icon) {
+    console.error("Invalid status config for status:", status, "normalized:", normalizedStatus);
+    return null;
+  }
+  const Icon = config.icon;
+
+  return (
+    <div className="flex items-center justify-between p-4 rounded-xl border bg-gradient-to-r from-slate-50 to-slate-100 dark:from-slate-800/50 dark:to-slate-700/50 shadow-sm">
+      <div className="flex items-center space-x-3">
+        <div className={`h-8 w-8 rounded-full flex items-center justify-center ${config.bgColor}`}>
+          <Icon className={`h-4 w-4 ${config.iconColor}`} />
+        </div>
+        <span className="font-semibold">{label}</span>
+      </div>
+      <Badge
+        variant={config.badgeVariant}
+        className={`shadow-sm px-3 py-1 ${config.badgeClassName}`}
+      >
+        {config.badgeText}
+      </Badge>
+    </div>
+  );
+};

@@ -1,6 +1,7 @@
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { ArrowRight, Lock, Shield, Zap } from "lucide-react";
+import { Shield } from "lucide-react";
+import Link from "next/link";
 
 const Hero = () => {
   return (
@@ -32,31 +33,18 @@ const Hero = () => {
           </div>
 
           <div
-            className="flex flex-col sm:flex-row gap-4 slide-up"
+            className="flex flex-col sm:flex-row gap-6 slide-up"
             style={{ animationDelay: "0.2s" }}
           >
-            <Button size="lg" className="group">
-              Start verification
-              <ArrowRight className="ml-2 h-4 w-4 transition-transform group-hover:translate-x-1" />
+            <Button size="lg" asChild>
+              <Link href="/academic">Academic Verification</Link>
             </Button>
-            <Button variant="outline" size="lg">
-              View demo
+            <Button size="lg" asChild>
+              <Link href="/pan">Pancard Verification</Link>
             </Button>
-          </div>
-
-          <div className="flex flex-wrap justify-center gap-8 pt-8 opacity-60">
-            <div className="flex items-center gap-2 text-sm">
-              <Lock className="h-4 w-4" />
-              <span>Zero-knowledge proofs</span>
-            </div>
-            <div className="flex items-center gap-2 text-sm">
-              <Shield className="h-4 w-4" />
-              <span>Government-signed PDFs</span>
-            </div>
-            <div className="flex items-center gap-2 text-sm">
-              <Zap className="h-4 w-4" />
-              <span>Instant verification</span>
-            </div>
+            <Button size="lg" asChild>
+              <Link href="/name">Name Verification</Link>
+            </Button>
           </div>
         </div>
       </div>
