@@ -49,7 +49,7 @@ export async function getVerifyPan(id: string) {
     return {
       message: "Name Verify fetched successfully",
       success: true,
-      data: panVerify,
+      data: JSON.parse(JSON.stringify(panVerify)),
     };
   } catch (err) {
     return {

@@ -19,7 +19,10 @@ export async function getNameDashboardData(email: string) {
     return {
       message: "Data fetched successfully",
       success: true,
-      data: { recievedVerificationsRequest, sentVerificationsRequest },
+      data: { 
+        recievedVerificationsRequest: recievedVerificationsRequest.map(doc => JSON.parse(JSON.stringify(doc))),
+        sentVerificationsRequest: sentVerificationsRequest.map(doc => JSON.parse(JSON.stringify(doc)))
+      },
     };
   } catch (err) {
     console.log(err);
@@ -70,7 +73,10 @@ export async function getAcademicDashboardData(email: string) {
     return {
       message: "Data fetched successfully",
       success: true,
-      data: { recievedVerificationsRequest, sentVerificationsRequest },
+      data: { 
+        recievedVerificationsRequest: recievedVerificationsRequest.map(doc => JSON.parse(JSON.stringify(doc))),
+        sentVerificationsRequest: sentVerificationsRequest.map(doc => JSON.parse(JSON.stringify(doc)))
+      },
     };
   } catch (err) {
     console.log(err);

@@ -55,7 +55,7 @@ export async function getVerifyAcademic(id: string) {
     return {
       message: "Name Verify fetched successfully",
       success: true,
-      data: academicVerify,
+      data: JSON.parse(JSON.stringify(academicVerify)),
     };
   } catch (err) {
     return {

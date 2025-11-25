@@ -1,7 +1,7 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 "use client";
 
-import React, { useState, useEffect, useCallback, ChangeEvent } from "react";
+import React, { useState, useEffect, useCallback, ChangeEvent, use } from "react";
 import { toast } from "sonner";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -70,8 +70,11 @@ function normalizeText(text: string): string {
 export default function EnhancedPDFVerifier({
   params,
 }: {
-  params: { id: string };
+  params: Promise<{ id: string }> | { id: string };
 }) {
+  // Unwrap params if it's a Promise (Next.js 15+)
+  const resolvedParams = 'then' in params && typeof params.then === 'function' ? use(params as Promise<{ id: string }>) : params as { id: string };
+  
   const [loading, setLoading] = useState(true);
   const [res, setRes] = useState<any>(null);
   const [error, setError] = useState<string | null>(null);
@@ -104,12 +107,12 @@ export default function EnhancedPDFVerifier({
   useEffect(() => {
     initPKIjs();
     fetchVerificationData();
-  }, [params.id]);
+  }, [resolvedParams.id]);
 
   const fetchVerificationData = async () => {
     setLoading(true);
     try {
-      const data = await getVerifyName(params.id);
+      const data = await getVerifyName(resolvedParams.id);
       if (!data.success) {
         setError(data.message);
       } else {
@@ -141,8 +144,10 @@ export default function EnhancedPDFVerifier({
   const verifyTextInPages = useCallback(
     (extractedPages: string[], proverName: string): VerificationStatus => {
       if (!proverName) return "not_found";
-      const normalizedProverName = normalizeText(proverName);
+      const normalizedProverName = normalizeText(proverName).trim();
       const proverNameWords = normalizedProverName.split(/\s+/).filter(w => w.length > 0);
+      
+      if (proverNameWords.length === 0) return "not_found";
       
       let exactMatch = false;
       let partialMatch = false;
@@ -150,8 +155,9 @@ export default function EnhancedPDFVerifier({
       for (const page of extractedPages) {
         const normalizedPage = normalizeText(page);
         
-        // Create pattern to match all words in order with word boundaries
+        // Create pattern to match all words in order with flexible word boundaries
         const escapedWords = proverNameWords.map(w => w.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
+        // Use flexible whitespace matching (allows multiple spaces, newlines, etc.)
         const pattern = new RegExp(`\\b${escapedWords.join("\\s+")}\\b`, "i");
         
         const match = normalizedPage.match(pattern);
@@ -160,33 +166,43 @@ export default function EnhancedPDFVerifier({
           const matchedText = match[0];
           const matchedWords = matchedText.split(/\s+/).filter(w => w.length > 0);
           
-          // Check if there are additional words immediately after the match
-          const matchEnd = match.index + matchedText.length;
-          const textAfterMatch = normalizedPage.substring(matchEnd).trim();
+          // Verify each word matches exactly (case-insensitive)
+          const allWordsMatch = matchedWords.length === proverNameWords.length &&
+            matchedWords.every((word, idx) => {
+              const expectedWord = proverNameWords[idx];
+              return word.toLowerCase() === expectedWord.toLowerCase();
+            });
           
-          // Check if there's text immediately after (no gap, just whitespace)
-          // This indicates the document has more words than provided
-          if (textAfterMatch.length > 0) {
-            const wordsAfterMatch = textAfterMatch.split(/\s+/).filter(w => w.length > 0);
-            // If there's at least one word immediately after (likely part of the name)
-            if (wordsAfterMatch.length > 0) {
-              // Check if it looks like a name word (alphanumeric, reasonable length)
-              const nextWord = wordsAfterMatch[0];
-              if (nextWord.length >= 2 && /^[a-z]+$/.test(nextWord)) {
-                // Document has more words than provided - it's wrong
-                partialMatch = true;
-                continue;
-              }
-            }
-          }
-          
-          // Exact match: same number of words AND no additional name words immediately after
-          if (matchedWords.length === proverNameWords.length) {
+          if (allWordsMatch) {
+            // All words match exactly - this is a valid match
+            // Don't worry about text after the match, as it could be titles, designations, etc.
             exactMatch = true;
             break;
           } else if (matchedWords.length < proverNameWords.length) {
             // Partial match: some words found but not all
             partialMatch = true;
+          } else {
+            // More words matched than expected - check if all expected words are present in order
+            let allExpectedWordsFound = true;
+            let searchIndex = 0;
+            for (const expectedWord of proverNameWords) {
+              const wordIndex = matchedWords.findIndex((w, idx) => 
+                idx >= searchIndex && w.toLowerCase() === expectedWord.toLowerCase()
+              );
+              if (wordIndex === -1) {
+                allExpectedWordsFound = false;
+                break;
+              }
+              searchIndex = wordIndex + 1;
+            }
+            
+            if (allExpectedWordsFound) {
+              // All expected words are present in order, even if there are extra words
+              exactMatch = true;
+              break;
+            } else {
+              partialMatch = true;
+            }
           }
         }
       }
@@ -280,25 +296,42 @@ export default function EnhancedPDFVerifier({
       return toast.error("Name must be found and correct in PDF");
 
     setProcessing(true);
+    console.log("🚀 Starting proof generation...");
+    console.log("📤 Sending request to /api/prove");
 
     try {
-      const response = await fetch("http://localhost:3001/prove", {
+      const requestBody = {
+        pdf_bytes: Array.from(pdfBytes),
+        page_number: 1,
+        offset: 0,
+        sub_string: res.proverName,
+      };
+      
+      console.log("📋 Request body size:", JSON.stringify(requestBody).length, "bytes");
+      console.log("📋 Substring:", res.proverName);
+
+      const response = await fetch("/api/prove", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          pdf_bytes: Array.from(pdfBytes),
-          page_number: 1,
-          offset: 0,
-          sub_string: res.proverName,
-        }),
+        body: JSON.stringify(requestBody),
       });
 
-      if (!response.ok) throw new Error(`Status ${response.status}`);
+      console.log("📥 Response status:", response.status);
+      console.log("📥 Response ok:", response.ok);
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        console.error("❌ Response error:", errorText);
+        throw new Error(`Status ${response.status}: ${errorText}`);
+      }
+      
       const data = await response.json();
+      console.log("✅ Proof received successfully");
       setProofData(JSON.stringify(data, null, 2));
       setProofGenerated(true);
       toast.success("SNARK proof generated successfully");
     } catch (e: any) {
+      console.error("❌ Error generating proof:", e);
       toast.error("Error generating proof: " + (e.message || e.toString()));
     } finally {
       setProcessing(false);
@@ -347,7 +380,7 @@ export default function EnhancedPDFVerifier({
         proofToVerify = JSON.parse(res.snarkProof);
       }
 
-      const response = await fetch("http://localhost:3001/verify", {
+      const response = await fetch("/api/verify", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(proofToVerify),

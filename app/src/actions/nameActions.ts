@@ -46,7 +46,7 @@ export async function getVerifyName(id: string) {
     return {
       message: "Name Verify fetched successfully",
       success: true,
-      data: nameVerify,
+      data: JSON.parse(JSON.stringify(nameVerify)),
     };
   } catch (err) {
     return {

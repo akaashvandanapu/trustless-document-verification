@@ -162,16 +162,20 @@ export default function EnhancedAcademicVerifier({
   const verifyNameInPages = useCallback(
     (extractedPages: string[], proverName: string): VerificationStatus => {
       if (!proverName) return "not_found";
-      const normalizedProverName = normalizeText(proverName);
+      // Normalize and make case-insensitive
+      const normalizedProverName = normalizeText(proverName).trim();
       const proverNameWords = normalizedProverName.split(/\s+/).filter(w => w.length > 0);
+      
+      if (proverNameWords.length === 0) return "not_found";
       
       let exactMatch = false;
       let partialMatch = false;
       
       for (const page of extractedPages) {
+        // Normalize page text (case-insensitive, removes punctuation)
         const normalizedPage = normalizeText(page);
         
-        // Create pattern to match all words in order with word boundaries
+        // Create pattern to match all words in order with word boundaries (case-insensitive)
         const escapedWords = proverNameWords.map(w => w.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
         const pattern = new RegExp(`\\b${escapedWords.join("\\s+")}\\b`, "i");
         
@@ -181,12 +185,18 @@ export default function EnhancedAcademicVerifier({
           const matchedText = match[0];
           const matchedWords = matchedText.split(/\s+/).filter(w => w.length > 0);
           
-          // Exact match: same number of words
-          if (matchedWords.length === proverNameWords.length) {
+          // Verify each word matches (case-insensitive comparison)
+          const allWordsMatch = matchedWords.length === proverNameWords.length &&
+            matchedWords.every((word, idx) => {
+              const expectedWord = proverNameWords[idx];
+              return word.toLowerCase() === expectedWord.toLowerCase();
+            });
+          
+          if (allWordsMatch) {
             exactMatch = true;
             break;
           } else {
-            // Partial match: name found but with different word count (extra or missing words)
+            // Partial match: name found but with different word count or words don't match exactly
             partialMatch = true;
           }
         }
@@ -206,8 +216,12 @@ export default function EnhancedAcademicVerifier({
   const verifyAcademicIdInPages = useCallback(
     (extractedPages: string[], proverAcademicId: string): VerificationStatus => {
       if (!proverAcademicId) return "not_found";
-      const normalizedId = normalizeText(proverAcademicId);
+      // Normalize and make case-insensitive (remove punctuation, lowercase)
+      const normalizedId = normalizeText(proverAcademicId).trim();
+      if (!normalizedId) return "not_found";
+      
       const found = extractedPages.some((page) => {
+        // Normalize page text (case-insensitive, removes punctuation)
         const normalizedPage = normalizeText(page);
         return normalizedPage.includes(normalizedId);
       });
@@ -220,29 +234,42 @@ export default function EnhancedAcademicVerifier({
     (extractedPages: string[], proverCgpa: string): VerificationStatus => {
       if (!proverCgpa) return "not_found";
       // Extract CGPA value from the provided string (handle formats like "9.4", "9,4", etc.)
-      const providedCgpa = parseFloat(proverCgpa.replace(/,/g, "."));
+      const providedCgpa = parseFloat(proverCgpa.replace(/,/g, ".").trim());
       if (isNaN(providedCgpa)) {
         return "not_found";
       }
 
       // Try to extract CGPA from document pages
-      // Look for patterns like: "CGPA: 8.4", "CGPA 8.4", "8.4", etc.
+      // Look for patterns like: "CGPA: 8.4", "CGPA : 8.4", "CGPA 8.4", etc.
+      // More flexible patterns to handle spaces around colons and various formats
       const cgpaPatterns = [
-        /cgpa[:\s]+(\d+[.,]\d+)/i,
-        /(\d+[.,]\d+)[\s]*cgpa/i,
-        /grade[:\s]+point[:\s]+average[:\s]+(\d+[.,]\d+)/i,
-        /gpa[:\s]+(\d+[.,]\d+)/i,
-        /(\d+[.,]\d+)[\s]*gpa/i,
+        // "CGPA : 8.4" or "CGPA: 8.4" or "CGPA 8.4" (flexible whitespace and colon)
+        /cgpa\s*:\s*(\d+[.,]\d+)/i,
+        // "8.4 CGPA" (number before CGPA)
+        /(\d+[.,]\d+)\s*cgpa/i,
+        // "Grade Point Average: 8.4" (full phrase)
+        /grade\s+point\s+average\s*:\s*(\d+[.,]\d+)/i,
+        // "GPA: 8.4" or "GPA : 8.4"
+        /gpa\s*:\s*(\d+[.,]\d+)/i,
+        // "8.4 GPA" (number before GPA)
+        /(\d+[.,]\d+)\s*gpa/i,
+        // Just "CGPA" followed by number (more flexible)
+        /cgpa\s+(\d+[.,]\d+)/i,
+        // "GPA" followed by number
+        /gpa\s+(\d+[.,]\d+)/i,
       ];
 
-      let foundCgpa: number | null = null;
+      const foundCgpaValues: number[] = [];
+      
+      // First pass: collect all potential CGPA values near CGPA/GPA keywords
       for (const page of extractedPages) {
         for (const pattern of cgpaPatterns) {
           const match = page.match(pattern);
-          if (match) {
+          if (match && match[1]) {
             const extractedCgpa = parseFloat(match[1].replace(/,/g, "."));
-            if (!isNaN(extractedCgpa)) {
-              foundCgpa = extractedCgpa;
+            if (!isNaN(extractedCgpa) && extractedCgpa >= 0 && extractedCgpa <= 10) {
+              // Only consider values in valid CGPA range (0-10)
+              foundCgpaValues.push(extractedCgpa);
               // Compare with a small tolerance for floating point comparison
               if (Math.abs(extractedCgpa - providedCgpa) < 0.01) {
                 return "found";
@@ -253,21 +280,33 @@ export default function EnhancedAcademicVerifier({
       }
 
       // Fallback: if no pattern match, check if the exact CGPA value appears near CGPA/GPA keywords
-      const normalizedProverCgpa = proverCgpa.replace(/,/g, ".").toLowerCase();
+      const normalizedProverCgpa = proverCgpa.replace(/,/g, ".").trim().toLowerCase();
       const cgpaVariations = [
         normalizedProverCgpa,
         normalizedProverCgpa.replace(".", ","),
+        providedCgpa.toString(),
+        providedCgpa.toFixed(1),
+        providedCgpa.toFixed(2),
       ];
 
       const foundInText = extractedPages.some((page) => {
         const pageLower = page.toLowerCase();
         for (const variation of cgpaVariations) {
           const escapedVariation = variation.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+          // More flexible pattern to match CGPA with various spacing
           const contextPattern = new RegExp(
-            `(?:cgpa|gpa|grade\\s+point\\s+average)[^\\n]{0,50}${escapedVariation}|${escapedVariation}[^\\n]{0,50}(?:cgpa|gpa|grade\\s+point\\s+average)`,
+            `(?:cgpa|gpa|grade\\s+point\\s+average)\\s*:?\\s*${escapedVariation}|${escapedVariation}\\s*(?:cgpa|gpa|grade\\s+point\\s+average)`,
             "i"
           );
           if (contextPattern.test(pageLower)) {
+            return true;
+          }
+          // Also check if the CGPA appears as a standalone number near relevant keywords
+          const standalonePattern = new RegExp(
+            `(?:cgpa|gpa|grade|point|average)\\s*:?\\s*\\b${escapedVariation}\\b|\\b${escapedVariation}\\b\\s*(?:cgpa|gpa|grade|point|average)`,
+            "i"
+          );
+          if (standalonePattern.test(pageLower)) {
             return true;
           }
         }
@@ -278,8 +317,8 @@ export default function EnhancedAcademicVerifier({
         return "found";
       }
 
-      // If we found a CGPA but it doesn't match, return "found_but_wrong"
-      if (foundCgpa !== null) {
+      // If we found CGPA values but none match, return "found_but_wrong"
+      if (foundCgpaValues.length > 0) {
         return "found_but_wrong";
       }
 
@@ -291,8 +330,12 @@ export default function EnhancedAcademicVerifier({
   const verifyInstituteInPages = useCallback(
     (extractedPages: string[], proverInstitute: string): VerificationStatus => {
       if (!proverInstitute) return "not_found";
-      const normalizedProverInstitute = normalizeText(proverInstitute);
+      // Normalize and make case-insensitive (remove punctuation, lowercase)
+      const normalizedProverInstitute = normalizeText(proverInstitute).trim();
+      if (!normalizedProverInstitute) return "not_found";
+      
       const found = extractedPages.some((page) => {
+        // Normalize page text (case-insensitive, removes punctuation)
         const normalizedPage = normalizeText(page);
         return normalizedPage.includes(normalizedProverInstitute);
       });
@@ -432,11 +475,14 @@ export default function EnhancedAcademicVerifier({
     setProcessing(true);
     setStatus("Generating SNARK proofs...");
     toast.info("Generating proofs... This may take a moment.");
+    console.log("🚀 Starting proof generation for academic verification...");
+    console.log("📤 Sending requests to /api/prove");
 
     try {
-      const proveEndpoint = "http://localhost:3001/prove";
-      const makeProofRequest = (sub_string: string) =>
-        fetch(proveEndpoint, {
+      const proveEndpoint = "/api/prove";
+      const makeProofRequest = (sub_string: string) => {
+        console.log("📋 Making proof request for:", sub_string);
+        return fetch(proveEndpoint, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
@@ -446,6 +492,7 @@ export default function EnhancedAcademicVerifier({
             sub_string,
           }),
         });
+      };
 
       const [
         nameProofResponse,
@@ -459,12 +506,26 @@ export default function EnhancedAcademicVerifier({
         makeProofRequest(res.proverCGPA),
       ]);
 
+      console.log("📥 Response statuses:", {
+        name: nameProofResponse.status,
+        academicId: academicIdProofResponse.status,
+        institute: instituteProofResponse.status,
+        cgpa: cgpaProofResponse.status,
+      });
+
       if (
         !nameProofResponse.ok ||
         !academicIdProofResponse.ok ||
         !instituteProofResponse.ok ||
         !cgpaProofResponse.ok
       ) {
+        const errors = await Promise.all([
+          nameProofResponse.text().catch(() => ""),
+          academicIdProofResponse.text().catch(() => ""),
+          instituteProofResponse.text().catch(() => ""),
+          cgpaProofResponse.text().catch(() => ""),
+        ]);
+        console.error("❌ Proof generation errors:", errors);
         throw new Error("Failed to generate one or more proofs.");
       }
 
@@ -533,7 +594,7 @@ export default function EnhancedAcademicVerifier({
       const proofToVerify =
         typeof res.snark === "string" ? JSON.parse(res.snark) : res.snark;
 
-      const verifyEndpoint = "http://localhost:3001/verify";
+      const verifyEndpoint = "/api/verify";
       const verifyProof = async (proof: any) => {
         if (!proof) return true;
         const response = await fetch(verifyEndpoint, {
@@ -923,6 +984,31 @@ export default function EnhancedAcademicVerifier({
                           <p className="font-medium">
                             No content extracted yet
                           </p>
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Enhanced Public Key Display */}
+                    {publicKeyPEM && (
+                      <div className="space-y-4">
+                        <Separator />
+                        <div>
+                          <h3 className="font-semibold text-foreground mb-3 flex items-center text-lg">
+                            <div className="h-6 w-6 rounded-md bg-blue-100 dark:bg-blue-900/30 flex items-center justify-center mr-2">
+                              <Key className="h-3 w-3 text-blue-600 dark:text-blue-400" />
+                            </div>
+                            Public Key
+                          </h3>
+                          <div className="relative">
+                            <Textarea
+                              readOnly
+                              value={publicKeyPEM}
+                              className="w-full h-32 text-xs font-mono bg-slate-50 dark:bg-slate-800/50 border-slate-200 dark:border-slate-700 shadow-inner resize-none"
+                            />
+                            <div className="absolute top-2 right-2 opacity-50">
+                              <Key className="h-4 w-4 text-muted-foreground" />
+                            </div>
+                          </div>
                         </div>
                       </div>
                     )}

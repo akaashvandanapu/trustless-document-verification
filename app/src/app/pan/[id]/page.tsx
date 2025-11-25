@@ -1,7 +1,7 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 "use client";
 
-import React, { useState, useEffect, useCallback, ChangeEvent } from "react";
+import React, { useState, useEffect, useCallback, ChangeEvent, use } from "react";
 import { toast } from "sonner";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -77,8 +77,11 @@ function normalizeText(text: string): string {
 export default function EnhancedPANVerifier({
   params,
 }: {
-  params: { id: string };
+  params: Promise<{ id: string }> | { id: string };
 }) {
+  // Unwrap params if it's a Promise (Next.js 15+)
+  const resolvedParams = 'then' in params && typeof params.then === 'function' ? use(params as Promise<{ id: string }>) : params as { id: string };
+  
   const [loading, setLoading] = useState(true);
   const [res, setRes] = useState<any>(null);
   const [error, setError] = useState<string | null>(null);
@@ -110,12 +113,12 @@ export default function EnhancedPANVerifier({
   useEffect(() => {
     initPKIjs();
     fetchVerificationData();
-  }, [params.id]);
+  }, [resolvedParams.id]);
 
   const fetchVerificationData = async () => {
     setLoading(true);
     try {
-      const data = await getVerifyPan(params.id);
+      const data = await getVerifyPan(resolvedParams.id);
       if (!data.success) {
         setError(data.message);
       } else {
@@ -280,9 +283,12 @@ export default function EnhancedPANVerifier({
     if (panIdVerified !== "found") return toast.error("PAN ID must be found and correct in PDF");
 
     setProcessing(true);
+    console.log("🚀 Starting proof generation for PAN verification...");
+    console.log("📤 Sending requests to /api/prove");
 
     try {
-      const nameProofResponse = await fetch("http://localhost:3001/prove", {
+      console.log("📋 Making name proof request for:", res.proverName);
+      const nameProofResponse = await fetch("/api/prove", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -293,7 +299,8 @@ export default function EnhancedPANVerifier({
         }),
       });
 
-      const panProofResponse = await fetch("http://localhost:3001/prove", {
+      console.log("📋 Making PAN proof request for:", res.proverPanId);
+      const panProofResponse = await fetch("/api/prove", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -304,7 +311,15 @@ export default function EnhancedPANVerifier({
         }),
       });
 
+      console.log("📥 Response statuses:", {
+        name: nameProofResponse.status,
+        pan: panProofResponse.status,
+      });
+
       if (!nameProofResponse.ok || !panProofResponse.ok) {
+        const nameError = await nameProofResponse.text().catch(() => "");
+        const panError = await panProofResponse.text().catch(() => "");
+        console.error("❌ Proof generation errors:", { nameError, panError });
         throw new Error("Failed to generate proofs");
       }
 
@@ -373,7 +388,7 @@ export default function EnhancedPANVerifier({
       let panVerificationResult = true;
 
       if (proofToVerify.nameProof) {
-        const nameResponse = await fetch("http://localhost:3001/verify", {
+        const nameResponse = await fetch("/api/verify", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(proofToVerify.nameProof),
@@ -383,7 +398,7 @@ export default function EnhancedPANVerifier({
       }
 
       if (proofToVerify.panProof) {
-        const panResponse = await fetch("http://localhost:3001/verify", {
+        const panResponse = await fetch("/api/verify", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(proofToVerify.panProof),

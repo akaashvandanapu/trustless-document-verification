@@ -10,7 +10,8 @@ export const sendAcademicVerificationEmail = async (
   id: string
 ) => {
   try {
-    const verifyUrl = `${process.env.API_URL}/academic/${id}`;
+    const apiUrl = process.env.API_URL || process.env.NEXT_PUBLIC_API_URL || "http://localhost:3001";
+    const verifyUrl = `${apiUrl}/academic/${id}`;
 
     const mailOptions = {
       from: `"Wisk" <wisk.zk.dev@gmail.com>`,
@@ -81,7 +82,8 @@ export const sendConfirmedAcademicVerificationEmail = async (
   id: string
 ) => {
   try {
-    const detailsUrl = `${process.env.API_URL}/academic/${id}`;
+    const apiUrl = process.env.API_URL || process.env.NEXT_PUBLIC_API_URL || "http://localhost:3001";
+    const detailsUrl = `${apiUrl}/academic/${id}`;
 
     const mailOptions = {
       from: `"Wisk" <wisk.zk.dev@gmail.com>`,

@@ -7,7 +7,8 @@ export const sendNamePanVerificationEmail = async (
   id: string
 ) => {
   try {
-    const verifyUrl = `${process.env.API_URL}/pan/${id}`;
+    const apiUrl = process.env.API_URL || process.env.NEXT_PUBLIC_API_URL || "http://localhost:3001";
+    const verifyUrl = `${apiUrl}/pan/${id}`;
 
     const mailOptions = {
       from: `"Wisk" <wisk.zk.dev@gmail.com>`,
@@ -69,7 +70,8 @@ export const sendConfirmedPanVerificationMail = async (
   id: string
 ) => {
   try {
-    const detailsUrl = `${process.env.API_URL}/pan/${id}`;
+    const apiUrl = process.env.API_URL || process.env.NEXT_PUBLIC_API_URL || "http://localhost:3001";
+    const detailsUrl = `${apiUrl}/pan/${id}`;
 
     const mailOptions = {
       from: `"Wisk" <wisk.zk.dev@gmail.com>`,
