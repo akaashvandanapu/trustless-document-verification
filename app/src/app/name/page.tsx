@@ -156,33 +156,6 @@ const Page = () => {
       <div className="flex-1 flex flex-col gap-6">
         <Card>
           <CardHeader>
-            <CardTitle>Verification Requests Received</CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-2">
-            {fetching ? (
-              <p className="text-sm text-gray-500">Loading...</p>
-            ) : recievedRequests.length > 0 ? (
-              recievedRequests.map((req) => (
-                <Link
-                  href={`/name/${req._id}`}
-                  key={req._id}
-                  className="block p-2 border rounded-md hover:bg-gray-50 transition flex justify-between items-center text-sm cursor-pointer"
-                >
-                  <span>{req.proverName}</span>
-                  <div className="flex gap-4 items-center">
-                    <span className="text-gray-500">{req.email}</span>
-                    {renderStatus(req.isVerified)}
-                  </div>
-                </Link>
-              ))
-            ) : (
-              <p className="text-sm text-gray-500">No requests received.</p>
-            )}
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardHeader>
             <CardTitle>Verification Requests Sent</CardTitle>
           </CardHeader>
           <CardContent className="space-y-2">

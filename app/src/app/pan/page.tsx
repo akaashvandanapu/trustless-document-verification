@@ -167,38 +167,6 @@ const PanVerificationDashboard = () => {
       <div className="flex-1 flex flex-col gap-6">
         <Card>
           <CardHeader>
-            <CardTitle>Verification Requests Received</CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-2">
-            {fetching ? (
-              <p className="text-sm text-gray-500">Loading...</p>
-            ) : receivedRequests.length > 0 ? (
-              receivedRequests.map((req) => (
-                <Link
-                  key={req._id}
-                  href={`/pan/${req._id}`}
-                  className="block p-3 border rounded-md hover:bg-gray-50 transition cursor-pointer"
-                >
-                  <div className="flex justify-between items-center">
-                    <div>
-                      <p className="font-medium">{req.proverName}</p>
-                      <p className="text-xs text-gray-500">{req.proverPanId}</p>
-                    </div>
-                    <div className="text-right">
-                      <p className="text-xs text-gray-500">{req.email}</p>
-                      {renderStatus(req.isVerified)}
-                    </div>
-                  </div>
-                </Link>
-              ))
-            ) : (
-              <p className="text-sm text-gray-500">No requests received.</p>
-            )}
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardHeader>
             <CardTitle>Verification Requests Sent</CardTitle>
           </CardHeader>
           <CardContent className="space-y-2">
